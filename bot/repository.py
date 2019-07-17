@@ -86,23 +86,23 @@ class Repository():
 
         if len(package.errors) > 0:
             errors = "\n".join(["  - " + str(error) for error in package.errors])
-            print(f"[ x ] \033[1m{package.name}\033[0m\n\033[0;31m" + errors + "\033[0m")
+            print(f"[ x ] {package.name}\n" + errors)
             return
 
         package.pull_repository()
 
-        # if "pre_build" in dir(package.module):
-        #     package.pre_build()
+        if "pre_build" in dir(package.module):
+            package.pre_build()
 
         package.set_real_version()
         package.set_variables()
 
         if package.has_new_version():
             packages.append(name)
-            print(f"[ \033[93m•\033[0m ] \033[1m{package.name}\033[0m")
+            print(f"[ - ] {package.name}")
             return True
 
-        print(f"[ ✓ ] \033[1m{package.name}\033[0m")
+        print(f"[ ✓ ] {package.name}")
 
 
 class Package():
