@@ -8,9 +8,14 @@ See the file 'LICENSE' for copying permission
 import os
 import base64
 
+from core.settings import IS_DEVELOPMENT
+from core.settings import IS_TRAVIS
+
 from datetime import datetime
 from core.data import conf
 from core.data import paths
+from core.data import update_disabled
+from core.data import remote_repository
 from utils.style import bold
 from utils.editor import edit_file
 from utils.process import extract
@@ -18,6 +23,7 @@ from utils.process import git_remote_path
 from utils.process import has_git_changes
 from utils.process import output
 from utils.process import strict_execute
+
 
 class Interface():
     html_table_tbody = ""
@@ -74,11 +80,15 @@ class Interface():
                         setattr(self, prefix + "_table_tbody", tbody + tr)
 
         # Create html mirror
-        self.move_to_mirror()
-        self.replace_html_variables()
-        self.compress()
+        if remote_repository():
+            self.move_to_mirror()
+            self.replace_html_variables()
+            self.compress()
 
         # Creade README.md
+        if update_disabled("readme"):
+            return
+
         self.move_to_root()
         self.replace_markdown_variables()
         self.commit_readme()
@@ -146,11 +156,21 @@ class Interface():
         os.system(f"cp {paths.www}/template.md {paths.base}/README.md")
 
     def replace_markdown_variables(self):
+        remote_path = self._get_remote_path()
+
+        if not remote_repository():
+            conf.url = "file:///path/to/repository"
+
         for line in edit_file(paths.base + "/README.md"):
+            line = line.replace("$remote_path", remote_path)
             line = line.replace("$content", self.markdown_table_tbody)
-            line = line.replace("$path", conf.url)
             line = line.replace("$database_capitalize", conf.db.capitalize())
             line = line.replace("$database", conf.db)
+
+            if not IS_TRAVIS and line.startswith("[<img src=\"https://img.shields.io/travis/"):
+                line = ""
+
+            line = line.replace("$path", conf.url)
 
             print(line)
 
@@ -177,6 +197,11 @@ class Interface():
 
         with open(paths.mirror + "/index.html", "w") as f:
             f.write(content)
+
+    def _get_remote_path(self):
+        remote_path = git_remote_path()
+        host = remote_path[:remote_path.find("/") + 1]
+        return remote_path.rstrip('.git').strip(host)
 
 
 def get_base64(path):

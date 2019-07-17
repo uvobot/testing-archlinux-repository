@@ -8,15 +8,18 @@ See the file 'LICENSE' for copying permission
 import os
 import sys
 import subprocess
-
+import logging
 
 from core.settings import UPSTREAM_REPOSITORY
 from core.settings import IS_DEVELOPMENT
 from core.settings import IS_TRAVIS
 
+from datetime import datetime
 from imp import load_source
 from core.data import conf
 from core.data import paths
+from core.data import update_disabled
+from core.data import remote_repository
 from utils.editor import edit_file
 from utils.editor import replace_ending
 from utils.process import extract
@@ -31,7 +34,7 @@ from utils.validator import validate
 
 class Repository():
     def pull_main_repository(self):
-        if IS_DEVELOPMENT:
+        if IS_DEVELOPMENT or update_disabled("bot"):
             return
 
         print("Updating repository bot:")
@@ -94,10 +97,46 @@ class Repository():
                 {paths.mirror}/{package}-*.pkg.tar.xz
             """)
 
-    def deploy(self):
-        if len(conf.updated) == 0:
+    def commit_log(self):
+        date = datetime.now()
+        name = date.strftime("%Y-%m")
+        time = date.strftime("%A %-d %B")
+        last_commit_message = output("git show -s --format='%s'")
+        last_commit_date = output("git log -1 --date=format:'%Y-%m-%d' --format='%ad'")
+
+        if os.stat(paths.log).st_size == 0:
             return
 
+        if last_commit_message.startswith(f"Log: Add errors into {name}.log") and last_commit_date == date.strftime("%Y-%m-%d") and IS_TRAVIS:
+            return
+
+        if has_git_changes(paths.log):
+            print(bold("Commit log files:"))
+
+            strict_execute(f"""
+            git add {paths.log};
+            git commit -m "Log: Add errors into {name}.log ~ {time}";
+            """)
+
+    def deploy(self):
+        if output("git branch -r --contains $(git log --pretty=format:'%h' -n 1) | sed s/^...//"):
+            return
+
+        if remote_repository() and len(conf.updated) > 0:
+            self._deploy_ssh()
+
+        self._deploy_git()
+
+    def _deploy_git(self):
+        print(title("Deploy to git remote") + "\n")
+
+        try:
+            subprocess.check_call("git push https://%s@%s HEAD:master &> /dev/null" % (
+                conf.github_token, git_remote_path()), shell=True)
+        except:
+            sys.exit("Error: Failed to push some refs to 'https://%s'" % git_remote_path())
+
+    def _deploy_ssh(self):
         print(title("Deploy to host remote") + "\n")
 
         strict_execute(f"""
@@ -113,14 +152,6 @@ class Repository():
             {paths.mirror}/ \
             {conf.ssh_user}@{conf.ssh_host}:{conf.ssh_path}
         """)
-
-        print(title("Deploy to git remote") + "\n")
-
-        try:
-            subprocess.check_call("git push https://%s@%s HEAD:master &> /dev/null" % (
-                conf.github_token, git_remote_path()), shell=True)
-        except:
-            sys.exit("Error: Failed to push some refs to 'https://%s'" % git_remote_path())
 
     def _execute(self, commands):
         subprocess.run(
@@ -167,9 +198,9 @@ class Package():
             if len(conf.updated) > 0 and IS_TRAVIS:
                 return
 
-            self._build()
-            self._commit()
-            self._set_package_updated()
+            if self._build():
+                self._commit()
+                self._set_package_updated()
 
         self._set_package_checked()
 
@@ -191,7 +222,26 @@ class Package():
     def _build(self):
         print(bold("Build package:"))
 
-        strict_execute(f"""
+        errors = {
+            1: "Unknown cause of failure.",
+            2: "Error in configuration file.",
+            3: "User specified an invalid option",
+            4: "Error in user-supplied function in PKGBUILD.",
+            5: "Failed to create a viable package.",
+            6: "A source or auxiliary file specified in the PKGBUILD is missing.",
+            7: "The PKGDIR is missing.",
+            8: "Failed to install dependencies.",
+            9: "Failed to remove dependencies.",
+            10: "User attempted to run makepkg as root.",
+            11: "User lacks permissions to build or install to a given location.",
+            12: "Error parsing PKGBUILD.",
+            13: "A package has already been built.",
+            14: "The package failed to install.",
+            15: "Programs necessary to run makepkg are missing.",
+            16: "Specified GPG key does not exist."
+        }
+
+        exit_code = strict_execute(f"""
         mkdir -p ./tmp; \
         makepkg \
             SRCDEST=./tmp \
@@ -201,12 +251,18 @@ class Package():
             --nocolor \
             --noconfirm \
             --skipinteg \
-            --syncdeps; \
-        rm -rf ./tmp;
+            --syncdeps;
         """)
 
+        strict_execute("rm -rf ./tmp")
+
         if conf.environment is "prod":
-            strict_execute("mv *.pkg.tar.xz %s" % paths.mirror)
+            if exit_code == 0:
+                strict_execute("mv *.pkg.tar.xz %s" % paths.mirror)
+            else:
+                logging.error(self.name + " package: " + errors.get(exit_code))
+
+        return exit_code == 0
 
     def _commit(self):
         if conf.environment is not "prod":

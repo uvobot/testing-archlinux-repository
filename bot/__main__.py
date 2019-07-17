@@ -13,6 +13,7 @@ from validator import validator
 from core.contextual import get_base_path
 from core.contextual import set_configs
 from core.contextual import set_paths
+from core.contextual import set_logs
 from core.contextual import set_repository
 from core.runner import runner
 
@@ -22,6 +23,7 @@ def set_contextual():
     set_paths(base)
     set_repository()
     set_configs()
+    set_logs()
 
 def main():
     set_contextual()
@@ -50,6 +52,7 @@ def main():
         environment.clean_mirror,
         repository.synchronize,
         repository.create_database,
+        repository.commit_log,
         interface.create,
         repository.deploy
     ])
