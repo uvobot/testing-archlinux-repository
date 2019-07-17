@@ -1,0 +1,16 @@
+# Maintainer: Marc-Antoine Loignon <developer@lognoz.org>
+
+pkgname=screen-recorder
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Record screen easily with ffmpeg"
+arch=("any")
+url="https://github.com/lognoz/archlinux-packages/tree/master/screen-recorder"
+license=("GPL3")
+optdepends=("ffmpeg: for video post-processing")
+source=("screen-recorder.sh")
+md5sums=("SKIP")
+
+package() {
+	install -Dm755 screen-recorder.sh "${pkgdir}/usr/bin/screen-recorder"
+}

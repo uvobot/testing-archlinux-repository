@@ -21,7 +21,7 @@ package:
 	$(call bot, package $(test))
 
 .PHONY: run
-run: update
+run:
 	$(call bot, build)
 
 .PHONY: update

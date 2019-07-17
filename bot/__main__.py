@@ -28,48 +28,8 @@ def set_contextual():
 def main():
     set_contextual()
 
-    runner.set("validation", [
-        validator.requirements,
-        validator.files,
-        validator.travis,
-        validator.content,
-        validator.configs,
-        environment.prepare_ssh,
-        validator.connection
-    ])
-
     runner.set("build", [
-        validator.requirements,
-        validator.files,
-        validator.travis,
-        validator.content,
-        validator.configs,
-        environment.prepare_ssh,
-        validator.connection,
-        environment.prepare_git,
-        environment.prepare_mirror,
-        environment.prepare_pacman,
-        environment.clean_mirror,
-        repository.synchronize,
-        repository.create_database,
-        repository.commit_log,
-        interface.create,
-        repository.deploy
-    ])
-
-    runner.set("update", [
-        environment.prepare_git,
-        repository.pull_main_repository
-    ])
-
-    runner.set("package", [
-        validator.requirements,
-        validator.files,
-        environment.prepare_package_testing,
-        validator.content,
-        validator.configs,
-        environment.prepare_pacman,
-        repository.test_package
+        repository.synchronize
     ])
 
     for execute in runner.get():

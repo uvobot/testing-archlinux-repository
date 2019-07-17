@@ -1,0 +1,25 @@
+# Maintainer: Marc-Antoine Loignon <developer@lognoz.org>
+
+pkgname=vim-gundo
+pkgver=46c443e
+pkgrel=1
+pkgdesc="Vim plugin to visualize your Vim undo tree."
+arch=("any")
+url="https://github.com/sjl/gundo.vim"
+license=("MIT")
+groups=("vim-plugins")
+depends=("vim" "git")
+makedepends=("git")
+source=("git+${url}.git")
+sha256sums=("SKIP")
+
+pkgver() {
+  cd "${srcdir}/gundo.vim"
+  echo "$(git describe --always|cut -d 'v' -f2|sed -e 's|-|.|g' )"
+}
+
+package() {
+  cd "${srcdir}/gundo.vim"
+  install -dm755 "${pkgdir}/usr/share/vim/vimfiles"
+  find * -maxdepth 0 -not -name "test" -type d -exec cp -rt "${pkgdir}/usr/share/vim/vimfiles" '{}' \+
+}

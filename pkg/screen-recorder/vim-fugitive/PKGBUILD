@@ -1,0 +1,25 @@
+# Maintainer: Marc-Antoine Loignon <developer@lognoz.org>
+
+pkgname=vim-fugitive
+pkgver=2.5.119.gbd0b87d
+pkgrel=1
+pkgdesc="A Git wrapper so awesome, it should be illegal."
+arch=("any")
+url="https://github.com/tpope/${pkgname}"
+license=("MIT")
+groups=("vim-plugins")
+depends=("vim" "git")
+makedepends=("git")
+source=("git+${url}.git")
+sha256sums=("SKIP")
+
+pkgver() {
+  cd "${srcdir}/${pkgname}"
+  echo "$(git describe --always|cut -d 'v' -f2|sed -e 's|-|.|g' )"
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  install -dm755 "${pkgdir}/usr/share/vim/vimfiles"
+  find * -maxdepth 0 -not -name "test" -type d -exec cp -rt "${pkgdir}/usr/share/vim/vimfiles" '{}' \+
+}
