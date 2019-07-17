@@ -62,14 +62,24 @@ class Repository():
     def synchronize(self):
         sys.path.append(paths.pkg)
 
+        print(bold("Check for any updates:"))
+
         pool = multiprocessing.Pool()
-        pool.map(self._initialize, conf.packages)
+        results = pool.imap_unordered(self._initialize, conf.packages)
         pool.close()
+
+        for result in results:
+            if result is "asdfasdf":
+                pool.terminate()
+                break
+
+        pool.join()
+
+        print(packages)
 
     def _initialize(self, name):
         package = Package(name)
 
-        package.set_utils()
         package.clean_directory()
         package.check_module_source()
         package.check_module_name()
@@ -81,10 +91,18 @@ class Repository():
 
         package.pull_repository()
 
-        #if "pre_build" in dir(package.module):
-        #   package.module.pre_build()
+        # if "pre_build" in dir(package.module):
+        #     package.pre_build()
 
-        print(f"[ ✓ ] \033[1m{package.name}\033[0m to {package.module.source}")
+        package.set_real_version()
+        package.set_variables()
+
+        if package.has_new_version():
+            packages.append(name)
+            print(f"[ \033[93m•\033[0m ] \033[1m{package.name}\033[0m")
+            return True
+
+        print(f"[ ✓ ] \033[1m{package.name}\033[0m")
 
 
 class Package():
@@ -94,10 +112,6 @@ class Package():
         self.name = name
         self.path = os.path.join(paths.pkg, name)
         self.module = load_source(name + ".package", os.path.join(self.path, "package.py"))
-
-    def set_utils(self):
-        self.module.edit_file = edit_file
-        self.module.replace_ending = replace_ending
 
     def clean_directory(self):
         files = os.listdir(self.path)
@@ -110,6 +124,49 @@ class Package():
 
             elif os.path.isfile(path) and f != "package.py":
                 os.remove(path)
+
+    def has_new_version(self):
+        if has_git_changes(self.path):
+            return True
+
+        for f in os.listdir(paths.mirror):
+            if f.startswith(self.module.name + '-' + self._epoch + self._version + '-'):
+                return False
+
+        return True
+
+    def set_variables(self):
+        self._version = extract(self.path, "pkgver")
+        self._name = extract(self.path, "pkgname")
+        self._epoch = extract(self.path, "epoch")
+
+        if self._epoch:
+            self._epoch += ":"
+
+    def pre_build(self):
+        self._execute("""
+        python -c 'from package import pre_build; pre_build()'
+        """)
+
+    def set_real_version(self):
+        try:
+            os.path.isfile(self.path + "/PKGBUILD")
+            output("source " + self.path + "/PKGBUILD; type pkgver &> /dev/null")
+        except:
+            return
+
+        self._execute("""
+        mkdir -p ./tmp; \
+        makepkg \
+            SRCDEST=./tmp \
+            --nobuild \
+            --nodeps \
+            --nocheck \
+            --nocolor \
+            --noconfirm \
+            --skipinteg; \
+        rm -rf ./tmp;
+        """)
 
     def check_module_source(self):
         if not _attribute_exists(self.module, "source"):
@@ -133,6 +190,7 @@ class Package():
         """)
 
     def _execute(self, process):
+        #subprocess.call(process, shell=True, cwd=self.path)
         subprocess.call(process, shell=True, cwd=self.path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def _attribute_exists(module, name):
