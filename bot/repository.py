@@ -8,7 +8,6 @@ See the file 'LICENSE' for copying permission
 import os
 import sys
 import shutil
-import logging
 import subprocess
 import multiprocessing
 
@@ -35,7 +34,7 @@ from utils.validator import validate
 
 
 manager = multiprocessing.Manager()
-packages = manager.list()
+outdated = manager.list()
 
 class Repository():
     def pull_main_repository(self):
@@ -62,43 +61,48 @@ class Repository():
     def synchronize(self):
         sys.path.append(paths.pkg)
 
-        print(bold("Check for any updates:"))
+        print("Check packages status:")
 
         pool = multiprocessing.Pool()
-        results = pool.imap_unordered(self._initialize, conf.packages)
+        results = pool.imap_unordered(self._check_package_status, conf.packages)
         pool.close()
 
         for result in results:
-            if result is "asdfasdf":
+            if result is True:
                 pool.terminate()
                 break
 
         pool.join()
 
-        print(packages)
+        for name in outdated:
+            self.build_package(name)
 
-    def _initialize(self, name):
+    def build_package(self, name, is_dependency=False):
+        package = Package(name, is_dependency)
+        package.build()
+
+    def _check_package_status(self, name):
         package = Package(name)
 
-        package.clean_directory()
-        package.check_module_source()
-        package.check_module_name()
+        processes = [
+            package.clean_directory,
+            package.is_user_config_valid,
+            package.pull_repository,
+            package.pre_build,
+            package.set_real_version,
+            package.set_variables,
+            package.is_build_valid
+        ]
 
-        if len(package.errors) > 0:
-            errors = "\n".join(["  - " + str(error) for error in package.errors])
-            print(f"[ x ] {package.name}\n" + errors)
-            return
+        for process in processes:
+            process()
 
-        package.pull_repository()
-
-        if "pre_build" in dir(package.module):
-            package.pre_build()
-
-        package.set_real_version()
-        package.set_variables()
+            if len(package.errors) > 0:
+                package._print_errors()
+                return
 
         if package.has_new_version():
-            packages.append(name)
+            outdated.append(name)
             print(f"[ - ] {package.name}")
             return True
 
@@ -106,12 +110,53 @@ class Repository():
 
 
 class Package():
-    def __init__(self, name):
+    def __init__(self, name, is_dependency=False):
         self.errors = []
 
         self.name = name
         self.path = os.path.join(paths.pkg, name)
         self.module = load_source(name + ".package", os.path.join(self.path, "package.py"))
+        self.is_dependency = is_dependency
+
+    def build(self):
+        if self.is_dependency:
+            self.clean_directory()
+            self.is_user_config_valid()
+            self.pull_repository()
+            self.pre_build()
+            self.set_real_version()
+            self.set_variables()
+            self.is_build_valid()
+
+        self.separator()
+        self.set_variables()
+        self.verify_dependencies()
+
+        if len(conf.updated) > 0 and IS_TRAVIS:
+            return
+
+        if self._make():
+            self._commit()
+            self._set_package_updated()
+
+    def is_user_config_valid(self):
+        self._check_module_source()
+        self._check_module_name()
+
+        if len(self.errors) > 0:
+            return False
+        else:
+            return True
+
+    def is_build_valid(self):
+        self._check_build_exists()
+        self._check_build_version()
+        self._check_build_name()
+
+        if len(self.errors) > 0:
+            return False
+        else:
+            return True
 
     def clean_directory(self):
         files = os.listdir(self.path)
@@ -144,41 +189,15 @@ class Package():
             self._epoch += ":"
 
     def pre_build(self):
-        self._execute("""
+        if "pre_build" not in dir(self.module):
+            return
+
+        exit_code = self._execute(f"""
         python -c 'from package import pre_build; pre_build()'
         """)
 
-    def set_real_version(self):
-        try:
-            os.path.isfile(self.path + "/PKGBUILD")
-            output("source " + self.path + "/PKGBUILD; type pkgver &> /dev/null")
-        except:
-            return
-
-        self._execute("""
-        mkdir -p ./tmp; \
-        makepkg \
-            SRCDEST=./tmp \
-            --nobuild \
-            --nodeps \
-            --nocheck \
-            --nocolor \
-            --noconfirm \
-            --skipinteg; \
-        rm -rf ./tmp;
-        """)
-
-    def check_module_source(self):
-        if not _attribute_exists(self.module, "source"):
-            self.errors.append("No source variable is defined in package.py")
-
-
-    def check_module_name(self):
-        if _attribute_exists(self.module, "name") is False:
-            self.errors.append("No name variable is defined in package.py")
-
-        elif self.name != self.module.name:
-            self.errors.append("The name defined in package.py is the not the same in PKGBUILD.")
+        if exit_code > 0:
+            self.errors.append("An error append when executing pre_build function into package.py")
 
     def pull_repository(self):
         self._execute(f"""
@@ -189,9 +208,149 @@ class Package():
         rm -f .gitignore;
         """)
 
-    def _execute(self, process):
-        #subprocess.call(process, shell=True, cwd=self.path)
-        subprocess.call(process, shell=True, cwd=self.path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    def set_real_version(self):
+        path = os.path.join(self.path, "tmp")
+
+        try:
+            os.path.isfile(self.path + "/PKGBUILD")
+            output("source " + self.path + "/PKGBUILD; type pkgver &> /dev/null")
+        except:
+            return
+
+        exit_code = self._execute(f"""
+        mkdir -p ./tmp;
+        makepkg \
+            SRCDEST=./tmp \
+            --nobuild \
+            --nodeps \
+            --nocheck \
+            --nocolor \
+            --noconfirm \
+            --skipinteg; \
+        """)
+
+        shutil.rmtree(path)
+
+        if exit_code > 0:
+            self.errors.append("An error append when executing makepkg")
+
+    def verify_dependencies(self):
+        self.depends = extract(self.path, "depends")
+        self.makedepends = extract(self.path, "makedepends")
+        self._dependencies = (self.depends + " " + self.makedepends).strip()
+
+        if self._dependencies == "":
+            return
+
+        for dependency in self._dependencies.split(" "):
+            try:
+                output("pacman -Sp '" + dependency + "' &>/dev/null")
+                continue
+            except:
+                if dependency not in conf.packages:
+                    sys.exit("\nError: %s is not part of the official package and can't be found in pkg directory." % dependency)
+
+                if dependency not in conf.updated:
+                    repository.build_package(dependency, True)
+
+    def _set_package_updated(self):
+        conf.updated.extend(self._name.split(" "))
+
+    def _commit(self):
+        if conf.environment is not "prod":
+            return
+
+        print(bold("Commit changes:"))
+
+        if has_git_changes("."):
+            self._execute(f"""
+            git add .;
+            git commit -m "Bot: Add last update into {self.name} package ~ version {self._version}";
+            """)
+        else:
+            self._execute(f"""
+            git commit --allow-empty -m "Bot: Rebuild {self.name} package ~ version {self._version}";
+            """)
+
+    def _make(self):
+        path = os.path.join(self.path, "tmp")
+        errors = {
+            1: "Unknown cause of failure.",
+            2: "Error in configuration file.",
+            3: "User specified an invalid option",
+            4: "Error in user-supplied function in PKGBUILD.",
+            5: "Failed to create a viable package.",
+            6: "A source or auxiliary file specified in the PKGBUILD is missing.",
+            7: "The PKGDIR is missing.",
+            8: "Failed to install dependencies.",
+            9: "Failed to remove dependencies.",
+            10: "User attempted to run makepkg as root.",
+            11: "User lacks permissions to build or install to a given location.",
+            12: "Error parsing PKGBUILD.",
+            13: "A package has already been built.",
+            14: "The package failed to install.",
+            15: "Programs necessary to run makepkg are missing.",
+            16: "Specified GPG key does not exist."
+        }
+
+        exit_code = self._execute(f"""
+        mkdir -p ./tmp; \
+        makepkg \
+            SRCDEST=./tmp \
+            --clean \
+            --install \
+            --nocheck \
+            --nocolor \
+            --noconfirm \
+            --skipinteg \
+            --syncdeps;
+        """, True)
+
+        shutil.rmtree(path)
+
+        if conf.environment is "prod" and exit_code == 0:
+            self._execute("mv *.pkg.tar.xz %s" % paths.mirror)
+
+        return exit_code == 0
+
+    def separator(self):
+        print(title(self.name))
+
+    def _check_module_source(self):
+        if not _attribute_exists(self.module, "source"):
+            self.errors.append("No source variable is defined in package.py")
+
+    def _check_module_name(self):
+        if _attribute_exists(self.module, "name") is False:
+            self.errors.append("No name variable is defined in package.py")
+
+        elif self.name != self.module.name:
+            self.errors.append("The name defined in package.py is the not the same in PKGBUILD.")
+
+    def _check_build_exists(self):
+        if not os.path.isfile(self.path + "/PKGBUILD"):
+            self.errors.append("PKGBUILD does not exists.")
+
+    def _check_build_version(self):
+        if not self._version:
+            self.errors.append("No version variable is defined in PKGBUILD.")
+
+    def _check_build_name(self):
+        if not self._name:
+            self.errors.append("No name variable is defined in PKGBUILD.")
+
+        elif self.name not in self._name.split(" "):
+            self.errors.append("The name defined in package.py is the not the same in PKGBUILD.")
+
+    def _print_errors(self):
+        errors = "\n".join([str(error) for error in self.errors])
+        print(f"[ x ] {self.name}\n==> ERROR:\n" + errors + "\n")
+
+    def _execute(self, process, show_output=False):
+        if show_output:
+            return subprocess.call(process, shell=True, cwd=self.path)
+        else:
+            return subprocess.call(process, shell=True, cwd=self.path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def _attribute_exists(module, name):
     try:
